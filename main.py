@@ -10,13 +10,13 @@ import sys
 parser = argparse.ArgumentParser()
 parser.add_argument("-i", "--input", required=True, help="Input file")
 parser.add_argument("-o", "--output", required=True, help="Output file")
-parser.add_argument("-q", "--quality", required=True, type=int, help="Quality")
-parser.add_argument("-p", "--profile", required=True, help="profile, can be normal, simple, faster, 720p, 1080p")
+parser.add_argument("-q", "--quality", required=True, type=int, help="Quality, between 17-22")
+parser.add_argument("-p", "--profile", required=True, help="profile, can be normal, simple, faster, 720p or 1080p")
 parser.add_argument("-f", "--flavor", required=True, help="flavor, can be fast, faster or fastest")
 
 args = vars(parser.parse_args())
 
-# does file exist?
+# does input file exist?
 if not os.path.isfile(args['input']):
 	print "Error: Input file doesn't exist"
 	sys.exit(1)
@@ -50,7 +50,7 @@ elif args['flavor'] == 'fastest':
 	flavors = 'performance2-60'
 else:
 	print "Error: You didn't choose a suitable flavor"
-	sys.exit(1)
+	sys.exit(5)
 
 # run mediainfo using inputs
 #root = ET.fromstring(subprocess.check_output(['mediainfo', '--Output=XML', args['input']]))
@@ -59,8 +59,14 @@ else:
 #for child in root:
 #	print child.tag, child.attrib
 
-raxcreds = os.path.expanduser('~/.credentials')
+# check credentials file exists
+if os.path.isfile(os.path.expanduser('~/.credentials')):
+	raxcreds = os.path.expanduser('~/.credentials')
+else:
+	print "Error: credentials file doesn't exist"
+	sys.exit(5)
 
+# assumes rax cloud, uk region for now
 pyrax.set_setting("identity_type", "rackspace")
 pyrax.set_default_region('lon')
 
@@ -68,15 +74,18 @@ pyrax.set_credential_file(raxcreds)
 
 cs = pyrax.cloudservers
 
+# image is archlinux 2014
 image = pyrax.images.get('88928a0a-f94c-47e3-ad7d-27b735af1a15')
 
 flavor = cs.flavors.get(flavors)
 
+# build compute node, name includes datetimestamp
 server = cs.servers.create('encoder'+datetime.datetime.now().isoformat(), image.id, flavor.id, key_name="ubuntu-zfs")
 
+# wait for build to complete
 pyrax.utils.wait_for_build(server, verbose=True)
 
-# find compute details
+# find compute ip address
 network = server.networks["public"]
 
 ipv4='0.0.0.0'
@@ -86,19 +95,18 @@ for public_ip in network:
 		ipv4 = public_ip
 
 # upload input to compute node
-#call(['rsync', '--progress', '-e', 'ssh -o StrictHostKeyChecking=no', args['input'], 'root@'+ipv4+':'])
+call(['rsync', '--progress', '-e', 'ssh -o StrictHostKeyChecking=no', args['input'], 'root@'+ipv4+':'])
+
 # temporary copy from faster source
-call(['ssh', '-o', 'StrictHostKeyChecking=no', 'root@'+ipv4, 'wget', '-q', '--no-check-certificate', 'https://secure.arhaswell.co.uk/luxo.ts'])
+#call(['ssh', '-o', 'StrictHostKeyChecking=no', 'root@'+ipv4, 'wget', '-q', '--no-check-certificate', 'https://secure.arhaswell.co.uk/luxo.ts'])
 
 # install handbrake on compute node
 call(['ssh', 'root@'+ipv4, 'pacman', '-Sy', 'handbrake-cli', '--noconfirm'])
 
-print ipv4
-
 # run encode
 call(['ssh', 'root@'+ipv4, 'HandBrakeCLI', '--main-feature', '-m', '-q', str(args['quality']), '--strict-anamorphic', '--crop', '--detelecine', '--decomb', '-i', args['input'], '-o', args['output'], '-E', 'copy:ac3', '-e', 'x264', '-x', profile])
 
-# copy output back
+# copy output file back
 call(['rsync', '--progress', 'root@'+ipv4+':'+args['output'], '.'])
 
 # delete node
